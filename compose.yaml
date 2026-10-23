@@ -1,0 +1,14 @@
+services:
+  smartbilling-portal:
+    build:
+      context: .
+    ports:
+      - "${PORT:-1717}:1717"
+    env_file:
+      - .env
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: 1717
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

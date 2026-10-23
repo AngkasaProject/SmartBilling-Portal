@@ -15,6 +15,18 @@ copy .env.example .env.local
 npm run dev
 ```
 
+## Docker
+
+Install Docker Engine/Desktop with the Docker Compose plugin, then copy `.env.example` to `.env`. Set `BILLING_API_URL` to an address reachable from the container (for a Billing API running on the Docker host, use `http://host.docker.internal:3001`) and set `PORTAL_SESSION_SECRET` to the secret generated in SmartBilling. Start the Portal with:
+
+```bash
+docker compose up --build -d
+```
+
+The Portal is available at `http://localhost:1717`. To use a different host port, set `PORT` when starting Compose, for example `PORT=8080 docker compose up --build -d` (in PowerShell: `$env:PORT=8080; docker compose up --build -d`). The container listens on port `1717`; the host port can be changed independently.
+
+View logs with `docker compose logs -f` and stop the app with `docker compose down`. The `.env` file is passed to the container at runtime and is excluded from the Docker build context.
+
 Set `BILLING_API_URL` for requests made by Next.js on the server (server components, route handlers, and server actions). It is not exposed to browsers. `NEXT_PUBLIC_BILLING_API_URL` is embedded in the browser bundle and is only needed if browser code calls SmartBilling directly. Both usually use the same API origin (for example, `http://localhost:3001`), but the `NEXT_PUBLIC_` value is public and must never contain credentials or secrets. If all API requests go through Next.js server code or a same-origin proxy, the public variable is unnecessary.
 
 Configure SmartBilling's `APP_URL` to the public Portal frontend URL (for example, `https://portal.example.com`), not the Billing API URL. Billing uses it to generate signed WhatsApp invoice links and payment return links. The Portal provides `/portal/billing?token=...` for those signed invoice links.
