@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { getSession } from "@/lib/auth";
-import type { PortalPublicStatus } from "@/lib/billing-api";
-import { billingApiFetch } from "@/lib/billing-api";
+import { getPortalServerStatus } from "@/lib/billing-api";
 import { PortalExperience } from "./portal-experience";
 
 export const metadata: Metadata = {
@@ -13,9 +12,7 @@ export const metadata: Metadata = {
 export default async function PortalPage() {
   const [session, status] = await Promise.all([
     getSession(),
-    billingApiFetch<PortalPublicStatus>("/api/portal/status").catch(() => ({
-      connected: false,
-    })),
+    getPortalServerStatus(),
   ]);
 
   return (

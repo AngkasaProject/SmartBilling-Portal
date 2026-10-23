@@ -36,6 +36,29 @@ export interface Customer {
   notes?: string;
 }
 
+export async function getPortalServerStatus(): Promise<PortalPublicStatus> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const status = await billingApiFetch<PortalPublicStatus>("/api/portal/status", {
+        signal: AbortSignal.timeout(3_000),
+      });
+      if (status.connected) return status;
+      lastError = new Error(status.error || "SmartBilling reported that the server is unavailable.");
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+  console.warn("Portal server health check failed after retries:", lastError);
+  return {
+    connected: false,
+    error: "Server tidak dapat dijangkau. Periksa BILLING_API_URL dari lingkungan Portal.",
+  };
+}
+
 export interface PortalCustomer {
   id: string;
   customerId: string;
@@ -75,6 +98,7 @@ export interface PortalPublicStatus {
   tagline?: string;
   phoneContact?: string;
   operatorWhatsapp?: string;
+  error?: string;
 }
 
 export interface PortalInvoice {
@@ -89,6 +113,9 @@ export interface PortalInvoice {
   dueDate: string;
   paidAt?: string;
   paymentMethod?: string;
+  latestPaymentStatus?: PaymentTransactionStatus;
+  latestPaymentMethod?: string;
+  latestPaymentChannel?: string;
 }
 
 export interface Invoice {
@@ -301,20 +328,31 @@ export class BillingApiError extends Error {
 }
 
 function getBillingApiBaseUrl(): string {
-  const baseUrl =
-    typeof window === "undefined"
-      ? process.env.BILLING_API_URL || process.env.NEXT_PUBLIC_BILLING_API_URL
-      : process.env.NEXT_PUBLIC_BILLING_API_URL;
+  const baseUrl = process.env.BILLING_API_URL;
 
   if (!baseUrl) {
     throw new Error(
-      typeof window === "undefined"
-        ? "Set BILLING_API_URL on the server (and NEXT_PUBLIC_BILLING_API_URL for browser calls)."
-        : "Set NEXT_PUBLIC_BILLING_API_URL to the SmartBilling API origin.",
+      "Set BILLING_API_URL to the SmartBilling API origin reachable from the Portal server.",
     );
   }
 
-  return baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("BILLING_API_URL must be an absolute HTTP or HTTPS URL.");
+  }
+  if (
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error("BILLING_API_URL must contain only the HTTP(S) origin, without credentials or a path.");
+  }
+  return parsed.origin;
 }
 
 export async function billingApiFetch<T>(
@@ -332,6 +370,7 @@ export async function billingApiFetch<T>(
     ...init,
     headers,
     cache: "no-store",
+    signal: init.signal || AbortSignal.timeout(8_000),
   });
   const responseText = await response.text();
   let payload: unknown;

@@ -2,7 +2,9 @@
 
 import { AlertCircle, ArrowLeft, CheckCircle2, Clock3, Wifi } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { BillingConnectionStatus } from "@/components/marketing/billing-connection-status";
 import type {
   BillingLinkResponse,
@@ -41,56 +43,75 @@ export function BillingLinkView({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(Boolean(token));
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const hasLoadedData = useRef(false);
+  const invoiceStatus = invoice?.status;
 
-  useEffect(() => {
+  const refreshBillingLink = useCallback(async (showLoading = false) => {
     if (!token) {
       setError("Tautan tagihan tidak valid.");
       setLoading(false);
       return;
     }
-    let active = true;
-    fetch("/api/portal/billing-link", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token }),
-      cache: "no-store",
-    })
-      .then(async (response) => {
-        const payload: unknown = await response.json().catch(() => null);
-        if (!response.ok) {
-          const message =
-            typeof payload === "object" &&
-            payload !== null &&
-            "error" in payload &&
-            typeof payload.error === "string"
-              ? payload.error
-              : "Tautan tagihan tidak dapat dibuka.";
-          throw new Error(message);
-        }
-        if (
-          typeof payload !== "object" ||
-          payload === null ||
-          !("customer" in payload) ||
-          !("invoices" in payload) ||
-          !Array.isArray(payload.invoices)
-        ) {
-          throw new Error("Data tagihan tidak sesuai format.");
-        }
-        if (!active) return;
-        const result = payload as BillingLinkResponse;
-        setData(result);
-        setInvoice(result.invoices.find((item) => item.status === "unpaid") || result.invoices[0] || null);
-      })
-      .catch((requestError: unknown) => {
-        if (active) setError(requestError instanceof Error ? requestError.message : "Tagihan belum tersedia.");
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+    if (showLoading) setLoading(true);
+    try {
+      const response = await fetch("/api/portal/billing-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+        cache: "no-store",
       });
-    return () => {
-      active = false;
-    };
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message =
+          typeof payload === "object" &&
+          payload !== null &&
+          "error" in payload &&
+          typeof payload.error === "string"
+            ? payload.error
+            : "Tautan tagihan tidak dapat dibuka.";
+        throw new Error(message);
+      }
+      if (
+        typeof payload !== "object" ||
+        payload === null ||
+        !("customer" in payload) ||
+        !("invoices" in payload) ||
+        !Array.isArray(payload.invoices)
+      ) {
+        throw new Error("Data tagihan tidak sesuai format.");
+      }
+      const result = payload as BillingLinkResponse;
+      hasLoadedData.current = true;
+      setData(result);
+      setError("");
+      setInvoice((current) =>
+        result.invoices.find((item) => item.id === current?.id) ||
+        result.invoices.find((item) => item.status === "unpaid") ||
+        result.invoices[0] ||
+        null,
+      );
+    } catch (requestError) {
+      if (!hasLoadedData.current) {
+        setError(requestError instanceof Error ? requestError.message : "Tagihan belum tersedia.");
+      }
+    } finally {
+      if (showLoading) setLoading(false);
+    }
   }, [token]);
+
+  useEffect(() => {
+    void refreshBillingLink(true);
+  }, [refreshBillingLink]);
+
+  useEffect(() => {
+    if (invoiceStatus !== "unpaid") return;
+    const interval = window.setInterval(() => void refreshBillingLink(), 8_000);
+    return () => window.clearInterval(interval);
+  }, [invoiceStatus, refreshBillingLink]);
+
+  useEffect(() => {
+    if (invoiceStatus && invoiceStatus !== "unpaid") setPaymentOpen(false);
+  }, [invoiceStatus]);
 
   return (
     <div className="portal-theme min-h-screen bg-slate-950 text-slate-100">
@@ -115,7 +136,7 @@ export function BillingLinkView({
         {!billingConnected ? (
           <div role="alert" className="mb-5 flex gap-3 rounded-2xl border border-rose-400/20 bg-rose-400/[0.07] p-4 text-sm text-rose-100">
             <AlertCircle className="h-5 w-5 shrink-0" />
-            Server Billing tidak terhubung. Pembayaran sementara tidak tersedia.
+            Server tidak terhubung. Pembayaran sementara tidak tersedia.
           </div>
         ) : null}
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-300">Pembayaran</p>
@@ -128,7 +149,8 @@ export function BillingLinkView({
             <p>{error}</p>
           </div>
         ) : data && invoice ? (
-          <section className="mt-6 rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5 sm:p-7">
+          <Card className="mt-6 border-white/[0.08] bg-white/[0.03] text-white">
+            <CardContent className="p-5 sm:p-7">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs text-slate-500">Pelanggan</p>
@@ -148,9 +170,9 @@ export function BillingLinkView({
               <p className="mt-1 text-2xl font-bold text-white">{formatRupiah(invoice.totalAmount)}</p>
             </div>
             {invoice.status === "unpaid" ? (
-              <button type="button" onClick={() => setPaymentOpen(true)} disabled={!billingConnected} className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-indigo-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50">
+              <Button type="button" onClick={() => setPaymentOpen(true)} disabled={!billingConnected} className="mt-6 w-full">
                 Lanjutkan pembayaran
-              </button>
+              </Button>
             ) : (
               <div className="mt-6 flex items-center gap-2 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.07] p-3 text-sm text-emerald-100">
                 <CheckCircle2 className="h-4 w-4" />
@@ -160,7 +182,8 @@ export function BillingLinkView({
             <p className="mt-4 text-xs leading-relaxed text-slate-500">
               Tautan ini hanya memberikan akses ke detail tagihan yang ditentukan dan dapat kedaluwarsa.
             </p>
-          </section>
+            </CardContent>
+          </Card>
         ) : (
           <p className="mt-6 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-6 text-sm text-slate-400">
             Tidak ada tagihan yang tersedia pada tautan ini.

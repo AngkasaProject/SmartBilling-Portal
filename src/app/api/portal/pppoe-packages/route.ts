@@ -10,7 +10,7 @@ export async function GET(): Promise<NextResponse> {
   } catch (error) {
     const status = error instanceof BillingApiError ? error.status : 502;
     return NextResponse.json(
-      { error: "Paket bulanan dari Billing tidak tersedia" },
+      { error: "Paket bulanan dari server tidak tersedia" },
       { status, headers: { "Cache-Control": "no-store" } },
     );
   }

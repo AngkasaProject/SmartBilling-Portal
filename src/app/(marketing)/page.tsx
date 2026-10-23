@@ -1,10 +1,9 @@
 import type { Metadata } from "next";
 import { MarketingHome } from "@/components/marketing/marketing-home";
-import type {
-  PortalPublicStatus,
-  PublicHotspotProfile,
-  PublicPppoePackage,
-  VoucherProfilesResponse,
+import {
+  getPortalServerStatus,
+  getPublicHotspotProfiles,
+  getPublicPppoePackages,
 } from "@/lib/billing-api";
 
 export const metadata: Metadata = {
@@ -32,69 +31,46 @@ export const metadata: Metadata = {
   },
 };
 
-const getBillingApiBase = () =>
-  process.env.BILLING_API_URL || process.env.NEXT_PUBLIC_BILLING_API_URL;
+export const dynamic = "force-dynamic";
 
 async function getPublicPackages(): Promise<{
-  profiles: PublicHotspotProfile[];
-  pppoePackages: PublicPppoePackage[];
+  profiles: Awaited<ReturnType<typeof getPublicHotspotProfiles>>["profiles"];
+  pppoePackages: Awaited<ReturnType<typeof getPublicPppoePackages>>["packages"];
   error?: string;
 }> {
-  const baseUrl = getBillingApiBase();
-  if (!baseUrl) {
-    return {
-      profiles: [],
-      pppoePackages: [],
-      error: "Server Billing belum terhubung. Login dan pembelian sementara tidak tersedia.",
-    };
-  }
-
-  try {
-    const [voucherResponse, pppoeResponse] = await Promise.all([
-      fetch(new URL("/api/portal/vouchers", baseUrl), { next: { revalidate: 300 } }),
-      fetch(new URL("/api/portal/pppoe-packages", baseUrl), { next: { revalidate: 300 } }),
-    ]);
-    if (!voucherResponse.ok || !pppoeResponse.ok) {
-      throw new Error(`SmartBilling API returned HTTP ${Math.max(voucherResponse.status, pppoeResponse.status)}`);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const [voucherPayload, pppoePayload] = await Promise.all([
+        getPublicHotspotProfiles(),
+        getPublicPppoePackages(),
+      ]);
+      if (!Array.isArray(voucherPayload.profiles) || !Array.isArray(pppoePayload.packages)) {
+        throw new Error("Format daftar paket dari SmartBilling tidak valid.");
+      }
+      return {
+        profiles: voucherPayload.profiles,
+        pppoePackages: pppoePayload.packages,
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
     }
-    const [voucherPayload, pppoePayload]: [VoucherProfilesResponse, { packages: PublicPppoePackage[] }] =
-      await Promise.all([voucherResponse.json(), pppoeResponse.json()]);
-    if (!Array.isArray(voucherPayload.profiles) || !Array.isArray(pppoePayload.packages)) {
-      throw new Error("Format daftar paket dari SmartBilling tidak valid.");
-    }
-
-    return {
-      profiles: voucherPayload.profiles,
-      pppoePackages: pppoePayload.packages,
-    };
-  } catch (error) {
-    console.error("Failed to load public hotspot packages:", error);
-    return {
-      profiles: [],
-      pppoePackages: [],
-      error: "Daftar paket belum dapat dimuat. Silakan coba kembali nanti.",
-    };
   }
-}
-
-async function getPublicStatus(): Promise<PortalPublicStatus> {
-  const baseUrl = getBillingApiBase();
-  if (!baseUrl) return { connected: false };
-  try {
-    const response = await fetch(new URL("/api/portal/status", baseUrl), {
-      cache: "no-store",
-    });
-    if (!response.ok) return { connected: false };
-    return (await response.json()) as PortalPublicStatus;
-  } catch {
-    return { connected: false };
-  }
+  console.error("Failed to load public packages from the server after retry:", lastError);
+  return {
+    profiles: [],
+    pppoePackages: [],
+    error: "Daftar paket belum dapat dimuat. Silakan coba kembali nanti.",
+  };
 }
 
 export default async function MarketingPage() {
   const [{ profiles, pppoePackages, error }, status] = await Promise.all([
     getPublicPackages(),
-    getPublicStatus(),
+    getPortalServerStatus(),
   ]);
   return (
     <MarketingHome

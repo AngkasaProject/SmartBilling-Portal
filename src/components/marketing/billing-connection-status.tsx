@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PortalPublicStatus } from "@/lib/billing-api";
 
 interface BillingConnectionStatusProps {
@@ -15,22 +15,38 @@ export function BillingConnectionStatus({
   onStatusChange,
 }: BillingConnectionStatusProps) {
   const [connected, setConnected] = useState(initialStatus.connected);
+  const consecutiveFailures = useRef(0);
 
   useEffect(() => {
     let active = true;
     const checkStatus = async () => {
       try {
-        const response = await fetch("/api/portal/status", { cache: "no-store" });
+        const response = await fetch("/api/portal/status", {
+          cache: "no-store",
+          signal: AbortSignal.timeout(10_000),
+        });
         const status = (await response.json()) as PortalPublicStatus;
         if (active) {
           const isConnected = response.ok && status.connected;
-          setConnected(isConnected);
-          onStatusChange?.(isConnected);
+          if (isConnected) {
+            consecutiveFailures.current = 0;
+            setConnected(true);
+            onStatusChange?.(true);
+          } else {
+            consecutiveFailures.current += 1;
+            if (consecutiveFailures.current >= 2) {
+              setConnected(false);
+              onStatusChange?.(false);
+            }
+          }
         }
       } catch {
         if (active) {
-          setConnected(false);
-          onStatusChange?.(false);
+          consecutiveFailures.current += 1;
+          if (consecutiveFailures.current >= 2) {
+            setConnected(false);
+            onStatusChange?.(false);
+          }
         }
       }
     };
@@ -48,8 +64,8 @@ export function BillingConnectionStatus({
       aria-live="polite"
       title={
         connected
-          ? "Koneksi ke server Billing aktif"
-          : "Server Billing tidak terhubung. Login dan pembelian sedang dinonaktifkan."
+          ? "Koneksi ke server aktif"
+          : "Server tidak terhubung. Login dan pembelian sedang dinonaktifkan."
       }
       className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 ${
         connected
@@ -62,7 +78,7 @@ export function BillingConnectionStatus({
           connected ? "bg-emerald-400" : "bg-rose-400"
         }`}
       />
-      Billing {connected ? "aktif" : "nonaktif"}
+      Server {connected ? "aktif" : "nonaktif"}
     </span>
   );
 }

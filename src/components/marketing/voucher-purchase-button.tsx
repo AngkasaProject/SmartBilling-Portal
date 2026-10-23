@@ -1,8 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { createPortal } from "react-dom";
-import { CheckCircle2, LoaderCircle, X } from "lucide-react";
+import { CheckCircle2, LoaderCircle } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import type {
   ManualPaymentMethod,
   PaymentOptionsResponse,
@@ -18,6 +23,7 @@ interface VoucherPurchaseButtonProps {
 
 const inputClass =
   "mt-1 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-indigo-400/60 focus:ring-2 focus:ring-indigo-400/15";
+const pendingVoucherOrderKey = "smartbilling:pending-voucher-order";
 
 export function VoucherPurchaseButton({
   profile,
@@ -35,6 +41,35 @@ export function VoucherPurchaseButton({
   const [error, setError] = useState("");
   const [order, setOrder] = useState<VoucherOrderResponse | null>(null);
   const [orderStatus, setOrderStatus] = useState<VoucherOrderStatusResponse | null>(null);
+
+  useEffect(() => {
+    const rawOrder = window.sessionStorage.getItem(pendingVoucherOrderKey);
+    if (!rawOrder) return;
+    let pendingOrder: unknown;
+    try {
+      pendingOrder = JSON.parse(rawOrder);
+    } catch {
+      window.sessionStorage.removeItem(pendingVoucherOrderKey);
+      return;
+    }
+    if (
+      typeof pendingOrder !== "object" ||
+      pendingOrder === null ||
+      !("orderId" in pendingOrder) ||
+      typeof pendingOrder.orderId !== "string" ||
+      !("phone" in pendingOrder) ||
+      typeof pendingOrder.phone !== "string" ||
+      !("profileId" in pendingOrder) ||
+      pendingOrder.profileId !== profile.id
+    ) return;
+    setPhone(pendingOrder.phone);
+    setOrder({
+      orderId: pendingOrder.orderId,
+      status: "pending",
+      amount: profile.price,
+    });
+    setOpen(true);
+  }, [profile.id, profile.price]);
 
   useEffect(() => {
     if (!open || order) return;
@@ -59,7 +94,15 @@ export function VoucherPurchaseButton({
   }, [open, order]);
 
   useEffect(() => {
-    if (!order || order.status !== "pending" || !order.orderId || !phone) return;
+    const latestStatus = orderStatus?.status || order?.status;
+    if (
+      !order ||
+      !order.orderId ||
+      !phone ||
+      !latestStatus ||
+      (latestStatus !== "pending" && latestStatus !== "settlement") ||
+      orderStatus?.voucher
+    ) return;
     let active = true;
     const check = async () => {
       try {
@@ -69,7 +112,15 @@ export function VoucherPurchaseButton({
           body: JSON.stringify({ orderId: order.orderId, phone }),
         });
         const result = (await response.json()) as VoucherOrderStatusResponse & { error?: string };
-        if (response.ok && active) setOrderStatus(result);
+        if (response.ok && active) {
+          setOrderStatus(result);
+          setOrder((currentOrder) =>
+            currentOrder ? { ...currentOrder, status: result.status } : currentOrder,
+          );
+          if (result.voucher || result.status === "expired" || result.status === "canceled") {
+            window.sessionStorage.removeItem(pendingVoucherOrderKey);
+          }
+        }
       } catch {
         if (active) setError("Status pesanan sementara tidak dapat diperbarui.");
       }
@@ -79,7 +130,7 @@ export function VoucherPurchaseButton({
       active = false;
       window.clearInterval(interval);
     };
-  }, [order, phone]);
+  }, [order, orderStatus, phone]);
 
   const close = useCallback(() => {
     if (busy) return;
@@ -90,20 +141,6 @@ export function VoucherPurchaseButton({
       setOrderStatus(null);
     }, 200);
   }, [busy]);
-
-  useEffect(() => {
-    if (!open) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) close();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open, busy, close]);
 
   const placeOrder = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -125,6 +162,10 @@ export function VoucherPurchaseButton({
       const result = (await response.json()) as VoucherOrderResponse & { error?: string };
       if (!response.ok) throw new Error(result.error || "Pesanan belum dapat dibuat");
       if (result.redirectUrl) {
+        window.sessionStorage.setItem(
+          pendingVoucherOrderKey,
+          JSON.stringify({ orderId: result.orderId, phone, profileId: profile.id }),
+        );
         window.location.assign(result.redirectUrl);
         return;
       }
@@ -141,54 +182,34 @@ export function VoucherPurchaseButton({
 
   return (
     <>
-      <button
+      <Button
         type="button"
         disabled={disabled}
         onClick={() => setOpen(true)}
-        className="mt-6 inline-flex min-h-11 w-full items-center justify-center rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40"
+        className="mt-6 min-h-11 w-full rounded-xl bg-indigo-500 font-semibold text-white hover:bg-indigo-400"
       >
         Beli voucher
-      </button>
-      {open ? createPortal(
-        <div
-          className="portal-theme fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-950/80 p-4 backdrop-blur-sm sm:items-center"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !busy) close();
-          }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="voucher-checkout-title"
-            className="my-auto max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto overscroll-contain rounded-3xl border border-white/10 bg-slate-900 p-5 text-white shadow-2xl sm:p-6"
-            onMouseDown={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 id="voucher-checkout-title" className="text-lg font-bold">
+      </Button>
+      <Dialog open={open} onOpenChange={(nextOpen) => { if (nextOpen) setOpen(true); else close(); }}>
+        <DialogContent className="portal-theme max-h-[calc(100dvh-2rem)] overflow-y-auto border-white/10 bg-slate-900 p-5 text-white sm:rounded-3xl sm:p-6">
+            <DialogHeader className="text-left">
+                <DialogTitle className="text-lg font-bold text-white">
                   {order ? "Pesanan voucher" : "Beli voucher hotspot"}
-                </h2>
-                <p className="mt-1 text-sm text-slate-400">
+                </DialogTitle>
+                <DialogDescription className="text-slate-400">
                   {profile.name} · Rp {profile.price.toLocaleString("id-ID")}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={close}
-                aria-label="Tutup"
-                className="rounded-lg p-2 text-slate-400 hover:bg-white/5 hover:text-white"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+                </DialogDescription>
+            </DialogHeader>
 
             {completedVoucher ? (
-              <div className="mt-6 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.07] p-4">
+              <Card className="mt-6 border-emerald-400/20 bg-emerald-400/[0.07] text-white">
+                <CardContent className="p-4">
                 <CheckCircle2 className="h-6 w-6 text-emerald-300" />
                 <h3 className="mt-3 font-semibold">Voucher siap digunakan</h3>
                 <p className="mt-2 text-sm text-slate-300">KODE = <strong className="font-mono">{completedVoucher.code}</strong></p>
                 <p className="mt-1 text-sm text-slate-400">Masa aktif: {completedVoucher.validityDuration}</p>
-              </div>
+                </CardContent>
+              </Card>
             ) : order ? (
               <div className="mt-6 space-y-4">
                 <p className="text-sm text-slate-300">
@@ -225,18 +246,18 @@ export function VoucherPurchaseButton({
               </div>
             ) : (
               <form onSubmit={placeOrder} className="mt-6 space-y-3">
-                <label className="block text-xs font-semibold text-slate-300">
+                <Label className="block text-xs font-semibold text-slate-300">
                   Nama
-                  <input required minLength={2} maxLength={100} value={name} onChange={(event) => setName(event.target.value)} className={inputClass} />
-                </label>
-                <label className="block text-xs font-semibold text-slate-300">
+                  <Input required minLength={2} maxLength={100} value={name} onChange={(event) => setName(event.target.value)} className={inputClass} />
+                </Label>
+                <Label className="block text-xs font-semibold text-slate-300">
                   Nomor WhatsApp
-                  <input required type="tel" minLength={8} maxLength={32} value={phone} onChange={(event) => setPhone(event.target.value)} className={inputClass} />
-                </label>
-                <label className="block text-xs font-semibold text-slate-300">
+                  <Input required type="tel" minLength={8} maxLength={32} value={phone} onChange={(event) => setPhone(event.target.value)} className={inputClass} />
+                </Label>
+                <Label className="block text-xs font-semibold text-slate-300">
                   Email (opsional)
-                  <input type="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} className={inputClass} />
-                </label>
+                  <Input type="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} className={inputClass} />
+                </Label>
                 <label className="block text-xs font-semibold text-slate-300">
                   Metode pembayaran
                   <select value={paymentMode} onChange={(event) => setPaymentMode(event.target.value as "automatic" | "manual")} className={inputClass}>
@@ -252,21 +273,23 @@ export function VoucherPurchaseButton({
                     </select>
                   </label>
                 ) : null}
-                {error ? <p role="alert" className="rounded-xl border border-rose-400/20 bg-rose-400/[0.07] p-3 text-xs text-rose-200">{error}</p> : null}
-                <button
+                {error ? (
+                  <Alert variant="destructive" className="border-rose-400/20 bg-rose-400/[0.07] text-rose-200">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                ) : null}
+                <Button
                   type="submit"
                   disabled={busy || (!automaticAvailable && !methods.length) || (paymentMode === "manual" && !methodId)}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-400 disabled:opacity-50"
+                  className="w-full rounded-xl bg-indigo-500 py-3 font-semibold text-white hover:bg-indigo-400"
                 >
                   {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
                   {busy ? "Memproses..." : "Buat pesanan"}
-                </button>
+                </Button>
               </form>
             )}
-          </section>
-        </div>,
-        document.body,
-      ) : null}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

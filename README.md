@@ -27,9 +27,9 @@ The Portal is available at `http://localhost:1717`. To use a different host port
 
 View logs with `docker compose logs -f` and stop the app with `docker compose down`. The `.env` file is passed to the container at runtime and is excluded from the Docker build context.
 
-Set `BILLING_API_URL` for requests made by Next.js on the server (server components, route handlers, and server actions). It is not exposed to browsers. `NEXT_PUBLIC_BILLING_API_URL` is embedded in the browser bundle and is only needed if browser code calls SmartBilling directly. Both usually use the same API origin (for example, `http://localhost:3001`), but the `NEXT_PUBLIC_` value is public and must never contain credentials or secrets. If all API requests go through Next.js server code or a same-origin proxy, the public variable is unnecessary.
+Set `BILLING_API_URL` to the SmartBilling API origin reachable **from the Portal server process**. Use `http://localhost:3001` for local development when SmartBilling runs on the same machine, and `http://host.docker.internal:3001` when Portal runs in Docker and SmartBilling runs on the Docker host. Do not set this to the public Portal URL. Portal API calls are proxied through Next.js server routes; a `NEXT_PUBLIC_BILLING_API_URL` value is not needed.
 
-Configure SmartBilling's `APP_URL` to the public Portal frontend URL (for example, `https://portal.example.com`), not the Billing API URL. Billing uses it to generate signed WhatsApp invoice links and payment return links. The Portal provides `/portal/billing?token=...` for those signed invoice links.
+Configure SmartBilling's `APP_URL` to the public Portal frontend URL (for example, `https://portal.example.com`) and `PAYMENT_WEBHOOK_URL` to the public SmartBilling API endpoint (for example, `https://billing.example.com/api/payment/webhook`). SmartBilling uses the first for signed invoice links and customer payment returns, and the second for gateway notifications. The Portal provides `/portal/billing?token=...` for signed invoice links.
 
 Generate the portal session secret in SmartBilling under **Pengaturan → Billing & voucher → Secret sesi SmartBilling Portal**, then copy it to `PORTAL_SESSION_SECRET` in the Portal's `.env.local` (and the production deployment's environment). This secret is encrypted when stored by SmartBilling and can be revealed or copied from the authenticated admin dashboard. Keep the Portal environment value identical to the Billing-generated value; never prefix it with `NEXT_PUBLIC_`. Regenerating it invalidates existing portal sessions and requires updating the Portal environment and restarting/redeploying the Portal.
 
@@ -46,9 +46,9 @@ OTP challenges are stored as short-lived, single-use hashes in SmartBilling's SQ
 - Next.js 15 App Router, TypeScript, Tailwind CSS v4, and shadcn/ui configuration.
 - `/` is a public marketing page with server-fetched hotspot vouchers and monthly PPPoE packages. Hotspot purchases use Portal's same-origin API routes; monthly PPPoE subscriptions are directed to Customer Service.
 - `/portal` supports WhatsApp OTP sign-in, service and invoice details, estimated monthly quota usage, scheduled renewal upgrades, and end-of-paid-term cancellation.
-- Invoice payment, OTP, customer details, upgrade/cancellation requests, and Billing connectivity use server-side routes. The Portal does not connect to Billing's SQLite database or MikroTik directly.
+- Invoice payment, OTP, customer details, upgrade/cancellation requests, and server connectivity use server-side routes. The Portal does not connect to SmartBilling's SQLite database or MikroTik directly.
 - Upgrade requests take effect after the next renewal invoice is paid. PPPoE usage is approximate and sampled periodically by Billing.
-- Billing connectivity is shown in the public and customer portal. Login and purchases are disabled when Billing is unavailable.
+- Server connectivity is shown in the public and customer portal. Login and purchases are disabled when the server is unavailable.
 - `src/lib/billing-api.ts` contains TypeScript response types and HTTP helpers for SmartBilling endpoints.
 
 Configure the SmartBilling backend endpoints and shared `PORTAL_SESSION_SECRET` before enabling customer authentication. `BILLING_API_URL` must be reachable from the Portal server. For scheduled cancellation and upgrades to work, keep the Billing server's background task running.

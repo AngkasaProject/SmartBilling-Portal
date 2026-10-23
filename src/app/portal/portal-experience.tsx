@@ -11,7 +11,7 @@ import {
   Wifi,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { BillingConnectionStatus } from "@/components/marketing/billing-connection-status";
 import type {
   ManualPaymentMethod,
@@ -22,7 +22,19 @@ import type {
   PortalInvoice,
   PortalPublicStatus,
   PublicPppoePackage,
+  VoucherOrderStatusResponse,
 } from "@/lib/billing-api";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface PortalExperienceProps {
   initialSession: { name: string; phone: string } | null;
@@ -116,6 +128,10 @@ export function PortalExperience({
   const [loadingDashboard, setLoadingDashboard] = useState(Boolean(initialSession));
   const [dashboardError, setDashboardError] = useState("");
   const [notice, setNotice] = useState("");
+  const [paymentReturn, setPaymentReturn] = useState<{ invoiceId: string | null } | null>(null);
+  const [voucherReturn, setVoucherReturn] = useState<{ orderId: string; phone: string } | null>(null);
+  const [voucherReturnStatus, setVoucherReturnStatus] = useState<VoucherOrderStatusResponse | null>(null);
+  const [voucherReturnError, setVoucherReturnError] = useState("");
   const [modal, setModal] = useState<"upgrade" | "cancel" | PortalInvoice | null>(
     null,
   );
@@ -123,30 +139,146 @@ export function PortalExperience({
   const [actionBusy, setActionBusy] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const refreshDashboard = useCallback(async () => {
-    setLoadingDashboard(true);
-    setDashboardError("");
+  const refreshDashboard = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoadingDashboard(true);
+      setDashboardError("");
+    }
     try {
       const response = await fetch("/api/portal/me", { cache: "no-store" });
       if (!response.ok) throw new Error(await getErrorMessage(response));
       const payload: unknown = await response.json();
       if (!isDashboard(payload)) {
-        throw new Error("Data dashboard dari Billing tidak sesuai format.");
+        throw new Error("Data dashboard dari server tidak sesuai format.");
       }
       setDashboard(payload);
+      setDashboardError("");
     } catch (error) {
-      setDashboard(null);
-      setDashboardError(
-        error instanceof Error ? error.message : "Data pelanggan belum tersedia.",
-      );
+      if (!silent) {
+        setDashboard(null);
+        setDashboardError(
+          error instanceof Error ? error.message : "Data pelanggan belum tersedia.",
+        );
+      } else {
+        setDashboardError("Status layanan belum dapat diperbarui. Informasi yang tampil mungkin belum terbaru.");
+      }
     } finally {
-      setLoadingDashboard(false);
+      if (!silent) setLoadingDashboard(false);
     }
   }, []);
 
   useEffect(() => {
     if (session) void refreshDashboard();
   }, [session, refreshDashboard, refreshKey]);
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const payment = query.get("payment");
+    if (!payment) return;
+    if (query.get("tab") === "voucher") {
+      const orderId = query.get("orderId");
+      const rawOrder = window.sessionStorage.getItem("smartbilling:pending-voucher-order");
+      if (!orderId || !rawOrder) {
+        setVoucherReturnError("Pesanan voucher tidak ditemukan di sesi ini. Simpan bukti pembayaran dan hubungi Customer Service.");
+        return;
+      }
+      try {
+        const pendingOrder: unknown = JSON.parse(rawOrder);
+        if (
+          typeof pendingOrder !== "object" ||
+          pendingOrder === null ||
+          !("orderId" in pendingOrder) ||
+          pendingOrder.orderId !== orderId ||
+          !("phone" in pendingOrder) ||
+          typeof pendingOrder.phone !== "string"
+        ) {
+          throw new Error("Saved voucher order does not match the return URL.");
+        }
+        setVoucherReturn({ orderId, phone: pendingOrder.phone });
+        setNotice("Pembayaran voucher sedang diverifikasi oleh server.");
+      } catch {
+        setVoucherReturnError("Data pesanan voucher tidak valid. Simpan bukti pembayaran dan hubungi Customer Service.");
+      }
+      return;
+    }
+    if (query.get("tab") === "customer") {
+      setPaymentReturn({ invoiceId: query.get("invoiceId") });
+      setNotice(
+        payment === "failed"
+          ? "Pembayaran belum berhasil. Status tagihan tetap mengikuti konfirmasi server."
+          : "Pembayaran sedang diverifikasi oleh server. Status tagihan akan diperbarui otomatis setelah notifikasi pembayaran diproses.",
+      );
+      if (session) void refreshDashboard(true);
+    }
+  }, [refreshDashboard, session]);
+
+  useEffect(() => {
+    if (!voucherReturn) return;
+    let active = true;
+    const checkVoucherPayment = async () => {
+      if (!active) return;
+      try {
+        const response = await fetch("/api/portal/voucher-orders/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(voucherReturn),
+          cache: "no-store",
+        });
+        const payload: unknown = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(await getErrorMessage(response));
+        if (
+          typeof payload !== "object" ||
+          payload === null ||
+          !("status" in payload) ||
+          typeof payload.status !== "string"
+        ) {
+          throw new Error("Status pesanan voucher tidak valid.");
+        }
+        const status = payload as VoucherOrderStatusResponse;
+        if (!active) return;
+        setVoucherReturnStatus(status);
+        setVoucherReturnError("");
+        if (status.voucher) {
+          window.sessionStorage.removeItem("smartbilling:pending-voucher-order");
+          setNotice("Pembayaran berhasil dikonfirmasi. Voucher Anda sudah siap digunakan.");
+          window.clearInterval(interval);
+        } else if (status.status === "expired" || status.status === "canceled") {
+          window.sessionStorage.removeItem("smartbilling:pending-voucher-order");
+          window.clearInterval(interval);
+        }
+      } catch (error) {
+        if (active) setVoucherReturnError(error instanceof Error ? error.message : "Status voucher belum tersedia.");
+      }
+    };
+    const interval = window.setInterval(() => void checkVoucherPayment(), 5_000);
+    void checkVoucherPayment();
+    return () => {
+      active = false;
+      if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [voucherReturn]);
+
+  useEffect(() => {
+    if (!session || !dashboard?.invoices.some((invoice) => invoice.status === "unpaid")) return;
+    const interval = window.setInterval(() => void refreshDashboard(true), 8_000);
+    return () => window.clearInterval(interval);
+  }, [dashboard, refreshDashboard, session]);
+
+  useEffect(() => {
+    if (!paymentReturn || !dashboard) return;
+    const returnedInvoice = paymentReturn.invoiceId
+      ? dashboard.invoices.find((invoice) => invoice.id === paymentReturn.invoiceId)
+      : null;
+    if (
+      returnedInvoice?.status === "paid" ||
+      (!paymentReturn.invoiceId &&
+        dashboard.invoices.length > 0 &&
+        dashboard.invoices.every((invoice) => invoice.status === "paid"))
+    ) {
+      setNotice("Server mengonfirmasi pembayaran. Tagihan Anda sudah lunas.");
+      setPaymentReturn(null);
+    }
+  }, [dashboard, paymentReturn]);
 
   const handleLogout = async () => {
     try {
@@ -214,7 +346,7 @@ export function PortalExperience({
 
   return (
     <div className="portal-theme min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-white/[0.06] bg-white/95">
+      <header className="border-b border-white/[0.06] bg-slate-950/80 backdrop-blur">
         <nav className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4">
           <Link href="/" className="flex min-w-0 items-center gap-3">
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-500 to-emerald-500">
@@ -230,15 +362,16 @@ export function PortalExperience({
             />
             {session ? (
               <>
-                <button
+                <Button
                   type="button"
                   onClick={() => void refreshDashboard()}
                   disabled={loadingDashboard}
-                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-white/[0.06] disabled:opacity-50"
+                  variant="outline"
+                  className="h-auto rounded-xl border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/[0.06] disabled:opacity-50"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${loadingDashboard ? "animate-spin" : ""}`} />
                   <span className="hidden sm:inline">Perbarui</span>
-                </button>
+                </Button>
                 <button
                   type="button"
                   onClick={() => void handleLogout()}
@@ -265,8 +398,41 @@ export function PortalExperience({
         {!billingConnected ? (
           <div className="mb-6 flex gap-3 rounded-2xl border border-rose-400/20 bg-rose-400/[0.07] p-4 text-sm text-rose-100" role="alert">
             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
-            <p>Server Billing tidak terhubung. Login dan pengelolaan layanan sementara tidak tersedia. Silakan coba kembali saat koneksi pulih.</p>
+            <p>Server tidak terhubung. Login dan pengelolaan layanan sementara tidak tersedia. Silakan coba kembali saat koneksi pulih.</p>
           </div>
+        ) : null}
+
+        {voucherReturn ? (
+          <Card className="mb-6 border-indigo-300/15 bg-indigo-400/[0.07] text-indigo-100">
+            <CardContent className="p-5">
+              <h2 className="font-semibold">Status pembayaran voucher</h2>
+              {voucherReturnStatus?.voucher ? (
+                <div className="mt-3">
+                  <p className="text-sm">Voucher siap digunakan:</p>
+                  <p className="mt-1 font-mono text-lg font-bold">{voucherReturnStatus.voucher.code}</p>
+                  {voucherReturnStatus.voucher.password ? (
+                    <p className="mt-1 text-sm">Password: <span className="font-mono">{voucherReturnStatus.voucher.password}</span></p>
+                  ) : null}
+                  <p className="mt-1 text-sm text-indigo-100/70">Masa aktif: {voucherReturnStatus.voucher.validityDuration}</p>
+                </div>
+              ) : (
+                <p className="mt-2 text-sm">
+                  {voucherReturnStatus?.status === "expired" || voucherReturnStatus?.status === "canceled"
+                    ? "Pembayaran kedaluwarsa atau dibatalkan. Silakan buat pesanan baru."
+                    : "Pembayaran sedang menunggu konfirmasi. Status akan diperbarui otomatis."}
+                </p>
+              )}
+              {voucherReturnError ? (
+                <Alert variant="destructive" className="mt-4 border-rose-400/20 bg-rose-400/[0.07] text-rose-100">
+                  <AlertDescription>{voucherReturnError}</AlertDescription>
+                </Alert>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : voucherReturnError ? (
+          <Alert variant="destructive" className="mb-6 border-rose-400/20 bg-rose-400/[0.07] text-rose-100">
+            <AlertDescription>{voucherReturnError}</AlertDescription>
+          </Alert>
         ) : null}
 
         {session ? (
@@ -499,8 +665,8 @@ function LoginPanel({
   };
 
   return (
-    <div className="mx-auto grid max-w-4xl overflow-hidden rounded-3xl border border-white/[0.08] bg-white/[0.03] shadow-xl md:grid-cols-[1fr_0.9fr]">
-      <div className="hidden flex-col justify-between bg-gradient-to-br from-blue-50 via-white to-emerald-50 p-8 md:flex">
+    <Card className="mx-auto grid max-w-4xl overflow-hidden border-white/[0.08] bg-white/[0.03] shadow-xl md:grid-cols-[1fr_0.9fr]">
+      <div className="hidden flex-col justify-between bg-gradient-to-br from-indigo-950 via-slate-900 to-emerald-950 p-8 md:flex">
         <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05]">
           <Wifi className="h-6 w-6 text-indigo-200" />
         </span>
@@ -512,7 +678,7 @@ function LoginPanel({
         </div>
         <p className="text-xs text-slate-500">Akses aman menggunakan kode verifikasi sekali pakai.</p>
       </div>
-      <div className="p-6 sm:p-8">
+      <CardContent className="p-6 sm:p-8">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-300">Akun pelanggan</p>
         <h2 className="mt-2 text-2xl font-bold text-white">Masuk ke portal</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-400">
@@ -520,11 +686,16 @@ function LoginPanel({
             ? `Masukkan kode 6 digit yang dikirim ke WhatsApp ${phone}.`
             : "Masukkan nomor WhatsApp yang terdaftar di akun layanan."}
         </p>
-        {error ? <p role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/[0.07] px-3 py-2.5 text-sm text-rose-100">{error}</p> : null}
+        {error ? (
+          <Alert variant="destructive" className="mt-5 border-rose-400/20 bg-rose-400/[0.07] text-rose-100">
+            <AlertCircle />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
         {!sent ? (
           <form onSubmit={(event) => void sendCode(event)} className="mt-6">
-            <label htmlFor="portal-phone" className="text-sm font-medium text-slate-200">Nomor WhatsApp</label>
-            <input
+            <Label htmlFor="portal-phone" className="text-sm font-medium text-slate-200">Nomor WhatsApp</Label>
+            <Input
               id="portal-phone"
               type="tel"
               autoComplete="tel"
@@ -535,14 +706,14 @@ function LoginPanel({
               placeholder="Contoh: 081234567890"
               className={inputClass}
             />
-            <button type="submit" disabled={busy || !billingConnected} className={`${buttonClass} mt-5 w-full`}>
+            <Button type="submit" disabled={busy || !billingConnected} className={`${buttonClass} mt-5 w-full`}>
               {busy ? "Mengirim kode..." : "Kirim kode verifikasi"}
-            </button>
+            </Button>
           </form>
         ) : (
           <form onSubmit={(event) => void verifyCode(event)} className="mt-6">
-            <label htmlFor="portal-code" className="text-sm font-medium text-slate-200">Kode verifikasi</label>
-            <input
+            <Label htmlFor="portal-code" className="text-sm font-medium text-slate-200">Kode verifikasi</Label>
+            <Input
               id="portal-code"
               inputMode="numeric"
               autoComplete="one-time-code"
@@ -554,9 +725,9 @@ function LoginPanel({
               placeholder="000000"
               className={`${inputClass} text-center text-lg tracking-[0.35em]`}
             />
-            <button type="submit" disabled={busy || code.length !== 6 || !billingConnected} className={`${buttonClass} mt-5 w-full`}>
+            <Button type="submit" disabled={busy || code.length !== 6 || !billingConnected} className={`${buttonClass} mt-5 w-full`}>
               {busy ? "Memverifikasi..." : "Verifikasi & masuk"}
-            </button>
+            </Button>
             <button type="button" disabled={busy} onClick={() => { setSent(false); setCode(""); setVerificationToken(""); setError(""); }} className="mt-3 w-full py-2 text-sm text-slate-400 underline underline-offset-4 hover:text-slate-200">
               Ganti nomor atau kirim ulang kode
             </button>
@@ -565,8 +736,8 @@ function LoginPanel({
         <p className="mt-5 text-xs leading-relaxed text-slate-500">
           Kode berlaku terbatas dan hanya dapat digunakan satu kali. Jangan bagikan kode kepada siapa pun.
         </p>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -738,6 +909,17 @@ function InvoiceList({
                   {invoice.status === "paid" ? "Lunas" : invoice.status === "expired" ? "Kedaluwarsa" : "Dibatalkan"}
                 </span>
               )}
+              {invoice.status === "unpaid" && invoice.latestPaymentStatus ? (
+                <p className="text-xs text-amber-200">
+                  {invoice.latestPaymentStatus === "settlement"
+                    ? "Pembayaran diterima, status tagihan sedang diperbarui."
+                    : invoice.latestPaymentStatus === "pending"
+                      ? "Menunggu konfirmasi pembayaran."
+                      : invoice.latestPaymentStatus === "expired"
+                        ? "Transaksi kedaluwarsa; Anda dapat membuat pembayaran baru."
+                        : "Transaksi dibatalkan; Anda dapat membuat pembayaran baru."}
+                </p>
+              ) : null}
             </article>
           ))}
         </div>
@@ -768,70 +950,15 @@ function Modal({
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  const dialogRef = useRef<HTMLElement>(null);
-  const closeRef = useRef(onClose);
-
-  useEffect(() => {
-    closeRef.current = onClose;
-  }, [onClose]);
-
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    const dialog = dialogRef.current;
-    dialog?.focus();
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeRef.current();
-        return;
-      }
-      if (event.key !== "Tab" || !dialog) return;
-      const focusable = Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      );
-      if (!focusable.length) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (!first || !last) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      previousFocus?.focus();
-    };
-  }, []);
-
   return (
-    <div
-      className="portal-theme fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-5"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="portal-dialog-title" className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-white/10 bg-slate-900 p-5 shadow-2xl outline-none sm:rounded-3xl sm:p-6">
-        <div className="flex items-start justify-between gap-4">
-          <h2 id="portal-dialog-title" className="text-lg font-semibold text-white">{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Tutup dialog" className="rounded-lg p-1.5 text-slate-400 hover:bg-white/[0.07] hover:text-white">×</button>
-        </div>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="portal-theme max-h-[90vh] overflow-y-auto border-white/10 bg-slate-900 text-white sm:rounded-3xl">
+        <DialogHeader>
+          <DialogTitle className="text-left text-white">{title}</DialogTitle>
+        </DialogHeader>
         <div className="mt-4">{children}</div>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -962,9 +1089,9 @@ export function PaymentDialog({
             </div>
           ) : null}
           {!result && (options.automaticAvailable || options.manualMethods.length > 0) ? (
-            <button type="button" disabled={busy || (paymentMode === "manual" && !methodId)} onClick={() => void submitPayment()} className={`${buttonClass} mt-5 w-full`}>
+            <Button type="button" disabled={busy || (paymentMode === "manual" && !methodId)} onClick={() => void submitPayment()} className={`${buttonClass} mt-5 w-full`}>
               {busy ? "Menyiapkan pembayaran..." : "Lanjutkan pembayaran"}
-            </button>
+            </Button>
           ) : null}
         </>
       ) : null}

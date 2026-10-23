@@ -9,7 +9,7 @@ export async function GET(): Promise<NextResponse> {
     });
   } catch {
     return NextResponse.json(
-      { error: "Server Billing tidak tersedia" },
+      { error: "Server tidak tersedia" },
       { status: 503, headers: { "Cache-Control": "no-store" } },
     );
   }

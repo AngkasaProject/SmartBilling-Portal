@@ -13,8 +13,11 @@ import {
   Zap,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { TouchEvent as ReactTouchEvent } from "react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import type {
   PortalPublicStatus,
   PublicHotspotProfile,
@@ -73,14 +76,21 @@ export function MarketingHome({
   error,
   initialStatus,
 }: MarketingHomeProps) {
+  const router = useRouter();
   const [billingConnected, setBillingConnected] = useState(
     initialStatus.connected,
   );
+  const previousConnection = useRef(initialStatus.connected);
   const [activeSlide, setActiveSlide] = useState(0);
   const stageRef = useRef<HTMLElement>(null);
   const activeSlideRef = useRef(0);
   const slideLockedRef = useRef(false);
   const touchStartRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (billingConnected && !previousConnection.current) router.refresh();
+    previousConnection.current = billingConnected;
+  }, [billingConnected, router]);
 
   const brandName =
     initialStatus.companyName?.trim() ||
@@ -287,7 +297,7 @@ export function MarketingHome({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
               <span className="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
             </span>
-            Server Billing sedang tidak terhubung. Beberapa fitur mungkin tidak
+            Server sedang tidak terhubung. Beberapa fitur mungkin tidak
             tersedia.
           </div>
         ) : null}
@@ -407,20 +417,23 @@ export function MarketingHome({
             </div>
 
             {error ? (
-              <p
+              <div
                 role="status"
-                className="mt-8 rounded-2xl border border-rose-500/20 bg-rose-500/[0.08] px-5 py-4 text-sm text-rose-200"
+                className="mt-8 flex flex-col gap-4 rounded-2xl border border-rose-500/20 bg-rose-500/[0.08] px-5 py-4 text-sm text-rose-200 sm:flex-row sm:items-center sm:justify-between"
               >
-                {error}
-              </p>
+                <p>{error}</p>
+                <Button type="button" variant="outline" onClick={() => router.refresh()} className="border-rose-300/25 bg-transparent text-rose-100 hover:bg-rose-400/10">
+                  Coba muat ulang
+                </Button>
+              </div>
             ) : profiles.length ? (
               <div
                 className={`mt-8 grid gap-5 ${profiles.length === 1 ? "mx-auto max-w-lg" : "sm:grid-cols-2 lg:grid-cols-3"}`}
               >
                 {profiles.map((profile, index) => (
-                  <article
+                  <Card
                     key={profile.id}
-                    className="group flex min-h-[320px] flex-col rounded-3xl border border-white/10 bg-white/[0.02] p-6 transition-all duration-300 hover:-translate-y-1 hover:border-indigo-500/50 hover:bg-white/[0.04] hover:shadow-2xl hover:shadow-indigo-500/10 animate-[fadeInUp_0.5s_ease-out_both]"
+                    className="group flex min-h-[320px] flex-col rounded-3xl border-white/10 bg-white/[0.02] p-6 text-white shadow-none transition-all duration-300 hover:-translate-y-1 hover:border-indigo-500/50 hover:bg-white/[0.04] hover:shadow-2xl hover:shadow-indigo-500/10 animate-[fadeInUp_0.5s_ease-out_both]"
                     style={{ animationDelay: `${index * 100}ms` }}
                   >
                     <div className="flex items-start justify-between gap-3">
@@ -485,7 +498,7 @@ export function MarketingHome({
                         disabled={!billingConnected}
                       />
                     </div>
-                  </article>
+                  </Card>
                 ))}
               </div>
             ) : (
@@ -529,9 +542,9 @@ export function MarketingHome({
             {pppoePackages.length ? (
               <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                 {pppoePackages.map((plan, index) => (
-                  <article
+                  <Card
                     key={plan.id}
-                    className="group flex flex-col rounded-3xl border border-white/10 bg-white/[0.02] p-6 transition-all duration-300 hover:-translate-y-1 hover:border-emerald-500/50 hover:bg-white/[0.04] hover:shadow-2xl hover:shadow-emerald-500/10 animate-[fadeInUp_0.5s_ease-out_both]"
+                    className="group flex flex-col rounded-3xl border-white/10 bg-white/[0.02] p-6 text-white shadow-none transition-all duration-300 hover:-translate-y-1 hover:border-emerald-500/50 hover:bg-white/[0.04] hover:shadow-2xl hover:shadow-emerald-500/10 animate-[fadeInUp_0.5s_ease-out_both]"
                     style={{ animationDelay: `${index * 100}ms` }}
                   >
                     <p className="text-lg font-semibold text-white">
@@ -582,7 +595,7 @@ export function MarketingHome({
                         Informasi kontak CS belum tersedia.
                       </p>
                     )}
-                  </article>
+                  </Card>
                 ))}
               </div>
             ) : (
