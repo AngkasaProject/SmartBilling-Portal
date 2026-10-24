@@ -61,4 +61,9 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  :where(a, button, summary):focus-visible {
+    outline: 2px solid #a5b4fc;
+    outline-offset: 3px;
+  }
 }

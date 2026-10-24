@@ -22,12 +22,23 @@ export const metadata: Metadata = {
       "Pilih paket internet dan voucher hotspot yang sesuai dengan kebutuhan Anda.",
     type: "website",
     locale: "id_ID",
+    siteName: "SmartBilling Portal",
+    url: "/",
+    images: [
+      {
+        url: "/opengraph-image",
+        width: 1200,
+        height: 630,
+        alt: "Pilihan paket internet dan voucher hotspot SmartBilling",
+      },
+    ],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "Paket Internet & Hotspot | SmartBilling",
     description:
       "Pilih paket internet dan voucher hotspot yang sesuai dengan kebutuhan Anda.",
+    images: ["/opengraph-image"],
   },
 };
 

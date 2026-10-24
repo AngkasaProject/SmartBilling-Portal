@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   CircleHelp,
+  Clock3,
   CreditCard,
   LogOut,
   RefreshCw,
@@ -42,6 +43,7 @@ interface PortalExperienceProps {
 }
 
 type PortalAction = "schedule-upgrade" | "cancel-subscription";
+type PortalNotice = { message: string; tone: "success" | "pending" | "error" };
 
 const inputClass =
   "mt-1 w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2.5 text-sm text-white outline-none placeholder:text-slate-600 focus:border-indigo-400/60 focus:ring-2 focus:ring-indigo-400/15";
@@ -127,7 +129,8 @@ export function PortalExperience({
   );
   const [loadingDashboard, setLoadingDashboard] = useState(Boolean(initialSession));
   const [dashboardError, setDashboardError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [lastDashboardUpdatedAt, setLastDashboardUpdatedAt] = useState<string | null>(null);
+  const [notice, setNotice] = useState<PortalNotice | null>(null);
   const [paymentReturn, setPaymentReturn] = useState<{ invoiceId: string | null } | null>(null);
   const [voucherReturn, setVoucherReturn] = useState<{ orderId: string; phone: string } | null>(null);
   const [voucherReturnStatus, setVoucherReturnStatus] = useState<VoucherOrderStatusResponse | null>(null);
@@ -152,6 +155,7 @@ export function PortalExperience({
         throw new Error("Data dashboard dari server tidak sesuai format.");
       }
       setDashboard(payload);
+      setLastDashboardUpdatedAt(new Date().toISOString());
       setDashboardError("");
     } catch (error) {
       if (!silent) {
@@ -170,6 +174,19 @@ export function PortalExperience({
   useEffect(() => {
     if (session) void refreshDashboard();
   }, [session, refreshDashboard, refreshKey]);
+
+  useEffect(() => {
+    if (!session) return;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void refreshDashboard(true);
+      }
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [refreshDashboard, session]);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -195,7 +212,10 @@ export function PortalExperience({
           throw new Error("Saved voucher order does not match the return URL.");
         }
         setVoucherReturn({ orderId, phone: pendingOrder.phone });
-        setNotice("Pembayaran voucher sedang diverifikasi oleh server.");
+        setNotice({
+          message: "Pembayaran voucher sedang diverifikasi oleh server.",
+          tone: "pending",
+        });
       } catch {
         setVoucherReturnError("Data pesanan voucher tidak valid. Simpan bukti pembayaran dan hubungi Customer Service.");
       }
@@ -203,11 +223,13 @@ export function PortalExperience({
     }
     if (query.get("tab") === "customer") {
       setPaymentReturn({ invoiceId: query.get("invoiceId") });
-      setNotice(
-        payment === "failed"
-          ? "Pembayaran belum berhasil. Status tagihan tetap mengikuti konfirmasi server."
-          : "Pembayaran sedang diverifikasi oleh server. Status tagihan akan diperbarui otomatis setelah notifikasi pembayaran diproses.",
-      );
+      setNotice({
+        message:
+          payment === "failed"
+            ? "Pembayaran belum berhasil. Status tagihan tetap mengikuti konfirmasi server."
+            : "Pembayaran sedang diverifikasi oleh server. Status tagihan akan diperbarui otomatis setelah notifikasi pembayaran diproses.",
+        tone: payment === "failed" ? "error" : "pending",
+      });
       if (session) void refreshDashboard(true);
     }
   }, [refreshDashboard, session]);
@@ -240,7 +262,10 @@ export function PortalExperience({
         setVoucherReturnError("");
         if (status.voucher) {
           window.sessionStorage.removeItem("smartbilling:pending-voucher-order");
-          setNotice("Pembayaran berhasil dikonfirmasi. Voucher Anda sudah siap digunakan.");
+          setNotice({
+            message: "Pembayaran berhasil dikonfirmasi. Voucher Anda sudah siap digunakan.",
+            tone: "success",
+          });
           window.clearInterval(interval);
         } else if (status.status === "expired" || status.status === "canceled") {
           window.sessionStorage.removeItem("smartbilling:pending-voucher-order");
@@ -275,7 +300,10 @@ export function PortalExperience({
         dashboard.invoices.length > 0 &&
         dashboard.invoices.every((invoice) => invoice.status === "paid"))
     ) {
-      setNotice("Server mengonfirmasi pembayaran. Tagihan Anda sudah lunas.");
+      setNotice({
+        message: "Server mengonfirmasi pembayaran. Tagihan Anda sudah lunas.",
+        tone: "success",
+      });
       setPaymentReturn(null);
     }
   }, [dashboard, paymentReturn]);
@@ -286,15 +314,19 @@ export function PortalExperience({
       if (!response.ok) throw new Error("Sesi belum dapat ditutup. Coba lagi.");
       setSession(null);
       setDashboard(null);
-      setNotice("");
+      setLastDashboardUpdatedAt(null);
+      setNotice(null);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Sesi belum dapat ditutup. Coba lagi.");
+      setNotice({
+        message: error instanceof Error ? error.message : "Sesi belum dapat ditutup. Coba lagi.",
+        tone: "error",
+      });
     }
   };
 
   const submitAction = async (action: PortalAction) => {
     setActionBusy(true);
-    setNotice("");
+    setNotice(null);
     try {
       const response = await fetch("/api/portal/customer-action", {
         method: "POST",
@@ -316,16 +348,19 @@ export function PortalExperience({
         throw new Error(message);
       }
       setModal(null);
-      setNotice(
-        action === "schedule-upgrade"
-          ? "Paket baru dijadwalkan. Paket akan aktif setelah tagihan periode berikutnya dibayar."
-          : "Pemberhentian langganan dijadwalkan pada akhir masa layanan yang sudah dibayar.",
-      );
+      setNotice({
+        message:
+          action === "schedule-upgrade"
+            ? "Paket baru dijadwalkan. Paket akan aktif setelah tagihan periode berikutnya dibayar."
+            : "Pemberhentian langganan dijadwalkan pada akhir masa layanan yang sudah dibayar.",
+        tone: "success",
+      });
       setRefreshKey((key) => key + 1);
     } catch (error) {
-      setNotice(
-        error instanceof Error ? error.message : "Permintaan belum dapat diproses.",
-      );
+      setNotice({
+        message: error instanceof Error ? error.message : "Permintaan belum dapat diproses.",
+        tone: "error",
+      });
     } finally {
       setActionBusy(false);
     }
@@ -367,6 +402,7 @@ export function PortalExperience({
                   onClick={() => void refreshDashboard()}
                   disabled={loadingDashboard}
                   variant="outline"
+                  aria-label="Perbarui informasi pelanggan"
                   className="h-auto rounded-xl border-white/10 bg-transparent px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/[0.06] disabled:opacity-50"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${loadingDashboard ? "animate-spin" : ""}`} />
@@ -436,7 +472,7 @@ export function PortalExperience({
         ) : null}
 
         {session ? (
-          <section aria-labelledby="portal-heading">
+          <section aria-labelledby="portal-heading" aria-busy={loadingDashboard}>
             <div className="mb-7">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-300">
                 Portal pelanggan
@@ -447,11 +483,33 @@ export function PortalExperience({
               <p className="mt-2 text-sm text-slate-400">
                 Ringkasan layanan dan tagihan untuk akun {session.phone}.
               </p>
+              <p className="mt-2 text-xs text-slate-500">
+                {loadingDashboard
+                  ? "Memeriksa informasi terbaru..."
+                  : lastDashboardUpdatedAt
+                    ? `Terakhir diperbarui ${formatDateTime(lastDashboardUpdatedAt)}`
+                    : "Informasi belum diperbarui."}
+              </p>
             </div>
             {notice ? (
-              <div role="status" className="mb-5 flex items-start gap-3 rounded-2xl border border-indigo-300/15 bg-indigo-400/[0.07] p-4 text-sm text-indigo-100">
-                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
-                <p>{notice}</p>
+              <div
+                role={notice.tone === "error" ? "alert" : "status"}
+                className={`mb-5 flex items-start gap-3 rounded-2xl border p-4 text-sm ${
+                  notice.tone === "error"
+                    ? "border-rose-400/20 bg-rose-400/[0.07] text-rose-100"
+                    : notice.tone === "pending"
+                      ? "border-amber-300/15 bg-amber-400/[0.06] text-amber-100"
+                      : "border-emerald-400/20 bg-emerald-400/[0.07] text-emerald-100"
+                }`}
+              >
+                {notice.tone === "error" ? (
+                  <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                ) : notice.tone === "pending" ? (
+                  <Clock3 className="mt-0.5 h-5 w-5 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+                )}
+                <p>{notice.message}</p>
               </div>
             ) : null}
             {dashboardError ? (
@@ -463,53 +521,59 @@ export function PortalExperience({
                 <button type="button" onClick={() => void refreshDashboard()} className="shrink-0 underline underline-offset-4">Coba lagi</button>
               </div>
             ) : null}
-            {loadingDashboard ? (
+            {loadingDashboard && !dashboard ? (
               <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-10 text-center text-sm text-slate-400">
                 <RefreshCw className="mx-auto mb-3 h-5 w-5 animate-spin" />
                 Memuat informasi pelanggan...
               </div>
             ) : dashboard ? (
-              <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-                <div className="space-y-5">
-                  <SubscriptionCard
-                    customer={dashboard.customer}
-                    upgradePackages={dashboard.upgradePackages}
-                    canManage={billingConnected}
-                    cancellationScheduled={Boolean(dashboard.customer.cancelAtExpiry)}
-                    onUpgrade={() => {
-                      setSelectedPackageId(dashboard.upgradePackages[0]?.id || "");
-                      setModal("upgrade");
-                    }}
-                    onCancel={() => setModal("cancel")}
-                    whatsappLink={whatsappLink}
-                  />
-                  <InvoiceList
-                    invoices={dashboard.invoices}
-                    onPay={(invoice) => setModal(invoice)}
-                  />
-                </div>
-                <div className="space-y-5">
-                  <CustomerDetails customer={dashboard.customer} />
-                  <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5">
-                    <div className="flex items-start gap-3">
-                      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-400/10">
-                        <CircleHelp className="h-5 w-5 text-violet-200" />
-                      </span>
-                      <div>
-                        <h2 className="font-semibold text-white">Butuh bantuan?</h2>
-                        <p className="mt-1 text-sm leading-relaxed text-slate-400">
-                          Hubungi Customer Service untuk bantuan perubahan paket atau pertanyaan layanan.
-                        </p>
+              <>
+                <PortalSummary
+                  customer={dashboard.customer}
+                  invoices={dashboard.invoices}
+                />
+                <div className="mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+                  <div className="space-y-5">
+                    <InvoiceList
+                      invoices={dashboard.invoices}
+                      onPay={(invoice) => setModal(invoice)}
+                    />
+                    <SubscriptionCard
+                      customer={dashboard.customer}
+                      upgradePackages={dashboard.upgradePackages}
+                      canManage={billingConnected}
+                      cancellationScheduled={Boolean(dashboard.customer.cancelAtExpiry)}
+                      onUpgrade={() => {
+                        setSelectedPackageId(dashboard.upgradePackages[0]?.id || "");
+                        setModal("upgrade");
+                      }}
+                      onCancel={() => setModal("cancel")}
+                      whatsappLink={whatsappLink}
+                    />
+                  </div>
+                  <div className="space-y-5">
+                    <CustomerDetails customer={dashboard.customer} />
+                    <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5">
+                      <div className="flex items-start gap-3">
+                        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-400/10">
+                          <CircleHelp className="h-5 w-5 text-violet-200" />
+                        </span>
+                        <div>
+                          <h2 className="font-semibold text-white">Butuh bantuan?</h2>
+                          <p className="mt-1 text-sm leading-relaxed text-slate-400">
+                            Hubungi Customer Service untuk bantuan perubahan paket atau pertanyaan layanan.
+                          </p>
+                        </div>
                       </div>
+                      {whatsappLink ? (
+                        <a href={whatsappLink} target="_blank" rel="noreferrer" className="mt-5 inline-flex w-full items-center justify-center rounded-xl border border-white/10 px-4 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.06]">
+                          Hubungi CS via WhatsApp
+                        </a>
+                      ) : null}
                     </div>
-                    {whatsappLink ? (
-                      <a href={whatsappLink} target="_blank" rel="noreferrer" className="mt-5 inline-flex w-full items-center justify-center rounded-xl border border-white/10 px-4 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.06]">
-                        Hubungi CS via WhatsApp
-                      </a>
-                    ) : null}
                   </div>
                 </div>
-              </div>
+              </>
             ) : null}
           </section>
         ) : (
@@ -518,7 +582,7 @@ export function PortalExperience({
             onAuthenticated={(name, phone) => {
               setSession({ name: name || "Pelanggan", phone });
               setLoadingDashboard(true);
-              setNotice("");
+              setNotice(null);
             }}
           />
         )}
@@ -741,6 +805,82 @@ function LoginPanel({
   );
 }
 
+function PortalSummary({
+  customer,
+  invoices,
+}: {
+  customer: PortalCustomer;
+  invoices: PortalInvoice[];
+}) {
+  const statusLabel: Record<PortalCustomer["status"], string> = {
+    active: "Aktif",
+    expiring: "Segera berakhir",
+    isolated: "Terisolasi",
+    disabled: "Nonaktif",
+  };
+  const unpaidInvoices = invoices.filter((invoice) => invoice.status === "unpaid");
+  const unpaidTotal = unpaidInvoices.reduce(
+    (total, invoice) => total + invoice.totalAmount,
+    0,
+  );
+  const dataLimitBytes =
+    typeof customer.dataLimitMb === "number" && customer.dataLimitMb > 0
+      ? customer.dataLimitMb * 1024 * 1024
+      : null;
+  const dataRemaining =
+    dataLimitBytes === null
+      ? "Tidak tersedia"
+      : typeof customer.dataRemainingBytes === "number"
+        ? formatBytes(customer.dataRemainingBytes)
+        : typeof customer.dataUsedBytes === "number"
+          ? formatBytes(Math.max(0, dataLimitBytes - customer.dataUsedBytes))
+          : "Belum tersedia";
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-3">
+      <article className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
+        <p className="text-xs font-medium text-slate-400">Status layanan</p>
+        <p className="mt-2 text-lg font-semibold text-white">
+          {customer.cancelAtExpiry ? "Berhenti dijadwalkan" : statusLabel[customer.status]}
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          Berlaku sampai {formatDate(customer.expiredDate)}
+        </p>
+      </article>
+      <article className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
+        <p className="text-xs font-medium text-slate-400">Sisa kuota</p>
+        <p className="mt-2 text-lg font-semibold text-white">{dataRemaining}</p>
+        <p className="mt-1 text-xs text-slate-500">
+          {dataLimitBytes !== null
+            ? `Dari ${formatBytes(dataLimitBytes)} per periode`
+            : "Informasi kuota tidak tersedia"}
+        </p>
+      </article>
+      <article className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4">
+        <p className="text-xs font-medium text-slate-400">Tagihan belum lunas</p>
+        <p className="mt-2 text-lg font-semibold text-white">
+          {unpaidInvoices.length ? formatRupiah(unpaidTotal) : "Tidak ada"}
+        </p>
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <p className="text-xs text-slate-500">
+            {unpaidInvoices.length
+              ? `${unpaidInvoices.length} tagihan menunggu pembayaran`
+              : "Semua tagihan sudah tertangani"}
+          </p>
+          {unpaidInvoices.length ? (
+            <a
+              href="#portal-invoices"
+              className="shrink-0 text-xs font-semibold text-indigo-200 underline underline-offset-4 hover:text-white"
+            >
+              Lihat
+            </a>
+          ) : null}
+        </div>
+      </article>
+    </div>
+  );
+}
+
 function SubscriptionCard({
   customer,
   upgradePackages,
@@ -880,54 +1020,88 @@ function InvoiceList({
   invoices: PortalInvoice[];
   onPay: (invoice: PortalInvoice) => void;
 }) {
+  const unpaidInvoices = invoices.filter((invoice) => invoice.status === "unpaid");
+  const historyInvoices = invoices.filter((invoice) => invoice.status !== "unpaid");
+
+  const renderInvoice = (invoice: PortalInvoice) => (
+    <article
+      key={invoice.id}
+      className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between"
+    >
+      <div>
+        <p className="text-sm font-semibold text-white">{invoice.invoiceNumber}</p>
+        <p className="mt-1 text-xs text-slate-400">
+          {invoice.profileName} · Jatuh tempo {formatDate(invoice.dueDate)}
+        </p>
+        <p className="mt-1 text-sm font-medium text-slate-200">
+          {formatRupiah(invoice.totalAmount)}
+        </p>
+      </div>
+      {invoice.status === "unpaid" ? (
+        <button
+          type="button"
+          onClick={() => onPay(invoice)}
+          className={`${buttonClass} w-full shrink-0 sm:w-auto`}
+        >
+          Bayar tagihan
+        </button>
+      ) : (
+        <span
+          className={`w-fit rounded-full border px-3 py-1 text-xs font-medium ${invoice.status === "paid" ? "border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-200" : "border-white/10 bg-white/[0.04] text-slate-400"}`}
+        >
+          {invoice.status === "paid"
+            ? "Lunas"
+            : invoice.status === "expired"
+              ? "Kedaluwarsa"
+              : "Dibatalkan"}
+        </span>
+      )}
+      {invoice.status === "unpaid" && invoice.latestPaymentStatus ? (
+        <p className="text-xs text-amber-200">
+          {invoice.latestPaymentStatus === "settlement"
+            ? "Pembayaran diterima, status tagihan sedang diperbarui."
+            : invoice.latestPaymentStatus === "pending"
+              ? "Menunggu konfirmasi pembayaran."
+              : invoice.latestPaymentStatus === "expired"
+                ? "Transaksi kedaluwarsa; Anda dapat membuat pembayaran baru."
+                : "Transaksi dibatalkan; Anda dapat membuat pembayaran baru."}
+        </p>
+      ) : null}
+    </article>
+  );
+
   return (
-    <section className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5 sm:p-6">
+    <section
+      id="portal-invoices"
+      aria-labelledby="portal-invoices-heading"
+      className="scroll-mt-6 rounded-3xl border border-white/[0.08] bg-white/[0.03] p-5 sm:p-6"
+    >
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Pembayaran</p>
-          <h2 className="mt-1 text-xl font-bold text-white">Tagihan terbaru</h2>
+          <h2 id="portal-invoices-heading" className="mt-1 text-xl font-bold text-white">Tagihan</h2>
         </div>
         <CreditCard className="h-5 w-5 text-indigo-200" />
       </div>
-      {invoices.length ? (
+      {unpaidInvoices.length ? (
         <div className="mt-4 divide-y divide-white/[0.07]">
-          {invoices.map((invoice) => (
-            <article key={invoice.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm font-semibold text-white">{invoice.invoiceNumber}</p>
-                <p className="mt-1 text-xs text-slate-400">
-                  {invoice.profileName} · Jatuh tempo {formatDate(invoice.dueDate)}
-                </p>
-                <p className="mt-1 text-sm font-medium text-slate-200">{formatRupiah(invoice.totalAmount)}</p>
-              </div>
-              {invoice.status === "unpaid" ? (
-                <button type="button" onClick={() => onPay(invoice)} className={`${buttonClass} shrink-0`}>
-                  Bayar tagihan
-                </button>
-              ) : (
-                <span className={`w-fit rounded-full border px-3 py-1 text-xs font-medium ${invoice.status === "paid" ? "border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-200" : "border-white/10 bg-white/[0.04] text-slate-400"}`}>
-                  {invoice.status === "paid" ? "Lunas" : invoice.status === "expired" ? "Kedaluwarsa" : "Dibatalkan"}
-                </span>
-              )}
-              {invoice.status === "unpaid" && invoice.latestPaymentStatus ? (
-                <p className="text-xs text-amber-200">
-                  {invoice.latestPaymentStatus === "settlement"
-                    ? "Pembayaran diterima, status tagihan sedang diperbarui."
-                    : invoice.latestPaymentStatus === "pending"
-                      ? "Menunggu konfirmasi pembayaran."
-                      : invoice.latestPaymentStatus === "expired"
-                        ? "Transaksi kedaluwarsa; Anda dapat membuat pembayaran baru."
-                        : "Transaksi dibatalkan; Anda dapat membuat pembayaran baru."}
-                </p>
-              ) : null}
-            </article>
-          ))}
+          {unpaidInvoices.map(renderInvoice)}
         </div>
       ) : (
-        <p className="mt-5 rounded-2xl border border-dashed border-white/[0.1] p-5 text-center text-sm text-slate-400">
-          Belum ada tagihan yang ditampilkan.
+        <p className="mt-4 rounded-2xl border border-emerald-400/15 bg-emerald-400/[0.05] p-4 text-sm text-emerald-100">
+          Tidak ada tagihan yang perlu dibayar saat ini.
         </p>
       )}
+      {historyInvoices.length ? (
+        <details className="mt-4 border-t border-white/[0.07] pt-4">
+          <summary className="cursor-pointer text-sm font-medium text-slate-300 hover:text-white">
+            Riwayat tagihan ({historyInvoices.length})
+          </summary>
+          <div className="mt-2 divide-y divide-white/[0.07]">
+            {historyInvoices.map(renderInvoice)}
+          </div>
+        </details>
+      ) : null}
     </section>
   );
 }
